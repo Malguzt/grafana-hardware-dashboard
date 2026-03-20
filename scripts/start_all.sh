@@ -4,14 +4,34 @@ BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_DIR="$BASE_DIR/bin"
 CONFIG_DIR="$BASE_DIR/config"
 LOG_DIR="$BASE_DIR/logs"
+NVIDIA_EXPORTER_PORT="${NVIDIA_EXPORTER_PORT:-9400}"
 
 mkdir -p "$LOG_DIR"
 
+stop_from_pidfile() {
+    local pid_file="$1"
+    if [ -f "$pid_file" ]; then
+        local pid
+        pid="$(cat "$pid_file" 2>/dev/null || true)"
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+            sleep 1
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+        rm -f "$pid_file"
+    fi
+}
+
 # Kill running instances if any (simple kill, strictly filtering by path/names would be better but this is a local user script)
+stop_from_pidfile "$LOG_DIR/prometheus.pid"
+stop_from_pidfile "$LOG_DIR/node_exporter.pid"
+stop_from_pidfile "$LOG_DIR/nvidia_exporter.pid"
+stop_from_pidfile "$LOG_DIR/grafana.pid"
 pkill -f "prometheus --config.file=$CONFIG_DIR/prometheus.yml" || true
 pkill -f "node_exporter" || true
 pkill -f "python3 $BASE_DIR/scripts/nvidia_exporter.py" || true
 pkill -f "grafana-server" || true
+pkill -f "grafana server" || true
 
 sleep 5
 
@@ -23,8 +43,8 @@ echo "Iniciando Node Exporter..."
 echo $! > "$LOG_DIR/node_exporter.pid"
 
 # 2. Nvidia Exporter
-echo "Iniciando Nvidia Exporter..."
-python3 "$BASE_DIR/scripts/nvidia_exporter.py" > "$LOG_DIR/nvidia_exporter.log" 2>&1 &
+echo "Iniciando Nvidia Exporter en puerto ${NVIDIA_EXPORTER_PORT}..."
+NVIDIA_EXPORTER_PORT="$NVIDIA_EXPORTER_PORT" python3 "$BASE_DIR/scripts/nvidia_exporter.py" > "$LOG_DIR/nvidia_exporter.log" 2>&1 &
 echo $! > "$LOG_DIR/nvidia_exporter.pid"
 
 # 3. Prometheus

@@ -9,4 +9,4 @@ providers:
     updateIntervalSeconds: 10
     allowUiUpdates: true
     options:
-      path: /home/jose/projects/grafana-hardware-dashboard/dashboards
+      path: /home/jose/projects/metahumans/grafana-hardware-dashboard/dashboards

@@ -1,8 +1,30 @@
+import csv
 import http.server
+import io
+import os
 import subprocess
-import time
 
-PORT = 8000
+PORT = int(os.getenv("NVIDIA_EXPORTER_PORT", "9400"))
+
+
+def error_metrics(message):
+    safe_message = message.replace("\\", "\\\\").replace("\n", " ").replace('"', '\\"')
+    return (
+        "# HELP nvidia_smi_error Error running nvidia-smi\n"
+        "# TYPE nvidia_smi_error gauge\n"
+        "nvidia_smi_error 1\n"
+        "# HELP nvidia_smi_error_info Error details from nvidia-smi\n"
+        "# TYPE nvidia_smi_error_info gauge\n"
+        f'nvidia_smi_error_info{{message="{safe_message}"}} 1\n'
+    )
+
+
+def escape_label_value(value):
+    return value.replace("\\", "\\\\").replace("\n", " ").replace('"', '\\"')
+
+
+class ReusableHTTPServer(http.server.ThreadingHTTPServer):
+    allow_reuse_address = True
 
 class PrometheusExporter(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -30,9 +52,18 @@ class PrometheusExporter(http.server.BaseHTTPRequestHandler):
             "--format=csv,noheader,nounits"
         ]
         try:
-            output = subprocess.check_output(cmd).decode('utf-8').strip()
+            output = subprocess.check_output(
+                cmd,
+                stderr=subprocess.STDOUT,
+                timeout=10,
+            ).decode("utf-8").strip()
         except FileNotFoundError:
-            return "# HELP nvidia_smi_error Error running nvidia-smi\n# TYPE nvidia_smi_error gauge\nnvidia_smi_error 1\n"
+            return error_metrics("nvidia-smi command not found")
+        except subprocess.TimeoutExpired:
+            return error_metrics("nvidia-smi command timed out")
+        except subprocess.CalledProcessError as exc:
+            details = exc.output.decode("utf-8", errors="replace").strip() or "nvidia-smi failed"
+            return error_metrics(details)
 
         lines = output.split('\n')
         
@@ -52,7 +83,7 @@ class PrometheusExporter(http.server.BaseHTTPRequestHandler):
 
         for line in lines:
             try:
-                parts = [x.strip() for x in line.split(',')]
+                parts = next(csv.reader(io.StringIO(line), skipinitialspace=True))
                 if len(parts) < 6:
                     continue
                 
@@ -68,7 +99,7 @@ class PrometheusExporter(http.server.BaseHTTPRequestHandler):
                 if 'Not Supported' in fan:
                     fan = '0'
 
-                labels = f'gpu="{idx}",model="{name}"'
+                labels = f'gpu="{escape_label_value(idx)}",model="{escape_label_value(name)}"'
                 
                 temps.append(f'nvidia_gpu_temperature_celsius{{{labels}}} {temp}')
                 gpu_utils.append(f'nvidia_gpu_utilization_percent{{{labels}}} {gpu_util}')
@@ -86,6 +117,6 @@ class PrometheusExporter(http.server.BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     server_address = ('', PORT)
-    httpd = http.server.HTTPServer(server_address, PrometheusExporter)
+    httpd = ReusableHTTPServer(server_address, PrometheusExporter)
     print(f"Serving NVIDIA metrics on port {PORT}...")
     httpd.serve_forever()
